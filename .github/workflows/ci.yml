@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q --junitxml=junit.xml
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit
+          path: junit.xml
+
+  build:
+    name: Build image
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          tags: policy-assistant:${{ github.sha }}
+          outputs: type=docker,dest=${{ runner.temp }}/image.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: |
+          docker load --input "${{ runner.temp }}/image.tar"
+          docker run -d --name pa -p 8080:8080 policy-assistant:${{ github.sha }}
+          for _ in $(seq 1 30); do curl -fsS localhost:8080/healthz && exit 0; sleep 1; done
+          docker logs pa; exit 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image
+          path: ${{ runner.temp }}/image.tar
+          retention-days: 1
+
+  eval-gate:
+    name: Eval gate
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MODEL_NAME: ${{ vars.MODEL_NAME }}
+      JUDGE_MODEL: ${{ vars.JUDGE_MODEL }}
+      MODEL_BASE_URL: ${{ vars.MODEL_BASE_URL }}
+    steps:
+      - name: Check model key
+        env:
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+        run: |
+          if [ -z "$MODEL_API_KEY" ]; then
+            echo "::error title=Eval gate::MODEL_API_KEY is not available (fork PR or missing secret). A maintainer must run this from a branch in the main repo."
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - uses: actions/download-artifact@v8
+        with:
+          name: image
+          path: ${{ runner.temp }}
+      - name: Start service
+        env:
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+        run: |
+          docker load --input "${{ runner.temp }}/image.tar"
+          docker run -d --name pa -p 8080:8080 \
+            -e MODEL_API_KEY -e MODEL_NAME -e MODEL_BASE_URL \
+            policy-assistant:${{ github.sha }}
+          for _ in $(seq 1 30); do curl -fsS localhost:8080/healthz && exit 0; sleep 1; done
+          docker logs pa; exit 1
+      - name: Run evals
+        env:
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+        run: python evals/run_evals.py --base-url http://localhost:8080 --out eval-results
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-results
+          path: eval-results/
+
+  publish:
+    name: Publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: eval-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: image
+          path: ${{ runner.temp }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag and push
+        run: |
+          docker load --input "${{ runner.temp }}/image.tar"
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA::12}
+          docker tag "policy-assistant:${GITHUB_SHA}" "$IMAGE"
+          docker push "$IMAGE"
