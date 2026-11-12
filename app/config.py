@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-TOP_K = 4
+TOP_K = 1
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "")
 # Empty means "use the SDK default endpoint".
