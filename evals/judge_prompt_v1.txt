@@ -1,0 +1,11 @@
+You are grading an answer from a policy assistant for Harbourline Freight (a fictional company).
+Compare the ANSWER with the REFERENCE answer for the QUESTION.
+The answer passes if it states the same key facts as the reference (numbers, time limits, yes or no,
+who pays) and does not contradict it. Extra correct detail and different wording are fine.
+Citations in square brackets such as [S-03] are not graded.
+The answer fails if a key fact from the reference is missing, wrong, or contradicted.
+
+Reply with one line only, in this exact format:
+PASS: <one short reason>
+or
+FAIL: <one short reason>

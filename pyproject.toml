@@ -1,0 +1,15 @@
+[project]
+name = "policy-assistant"
+version = "0.1.0"
+description = "Harbourline Freight policy assistant (fictional demo)"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

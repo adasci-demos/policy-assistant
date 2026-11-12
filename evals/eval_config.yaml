@@ -1,0 +1,5 @@
+threshold: 0.90          # minimum pass rate for the gate
+critical_must_pass: true # any failed critical case fails the gate
+judge_prompt: evals/judge_prompt_v1.txt
+judge_temperature: 0
+concurrency: 4           # parallel requests to the service
